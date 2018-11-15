@@ -15,8 +15,9 @@
 
 package main;
 use Modern::Perl;
+use Mojo::Log;
 
-my $verbose = $ENV{VERBOSE};
+my $log = Mojo::Log->new;
 my $debug = $ENV{DEBUG};
 my $output;
 my $dx = 100;
@@ -103,8 +104,10 @@ package Line;
 use Class::Struct;
 
 struct Line => {
+		id => '$',
 		points => '@',
 		type => '$',
+		label => '$',
 		map => 'Mapper',
 	       };
 
@@ -168,10 +171,35 @@ sub svg {
     $path .= " L" . $current->partway($next, 0.7);
   }
 
+  my $id = $self->id;
   my $type = $self->type;
   my $attributes = $self->map->path_attributes($type);
-  my $data = "    <path $attributes d='$path'/>\n";
+  my $data = qq{    <path id="$id" $attributes d="$path"/>\n};
   $data .= $self->debug($closed) if $debug;
+  return $data;
+}
+
+sub svg_label {
+  my ($self) = @_;
+  return '' unless defined $self->label;
+  my $id = $self->id;
+  my $label = $self->label;
+  my $attributes = $self->map->label_attributes || "";
+  my $glow = $self->map->glow_attributes || "";
+  my $url = $self->map->url;
+  $url =~ s/\%s/url_encode($self->label)/e or $url .= url_encode($self->label) if $url;
+  # default is left, but if the line goes from right to left, then "left" means "upside down"
+  my $side = '';
+  if ($self->points->[1]->x < $self->points->[0]->x
+      or $#{$self->points} >= 2 and $self->points->[2]->x < $self->points->[0]->x) {
+    $side = ' side="right"';
+  }
+  my $data = qq{    <g>\n};
+  $data .= qq{      <text $attributes $glow><textPath$side href='#$id'>$label</textPath></text>\n>} if $glow;
+  $data .= qq{      <a xlink:href="$url">} if $url;
+  $data .= qq{      <text $attributes><textPath href='#$id'>$label</textPath></text>\n>};
+  $data .= qq{      </a>} if $url;
+  $data .= qq{    </g>\n};
   return $data;
 }
 
@@ -372,6 +400,7 @@ sub initialize {
 
 sub process {
   my $self = shift;
+  my $line_id = 0;
   foreach (@_) {
     if (/^(\d\d)(\d\d)(?:\s+([^"\r\n]+)?\s*(?:"(.+)"(?:\s+(\d+))?)?|$)/) {
       my $hex = Hex->new(x => $1, y => $2, map => $self);
@@ -381,9 +410,11 @@ sub process {
       $hex->type(\@types);
       push(@{$self->hexes}, $hex);
       push(@{$self->things}, $hex);
-    } elsif (/^(\d\d\d\d(?:-\d\d\d\d)+)\s+(\S+)/) {
+    } elsif (/^(\d\d\d\d(?:-\d\d\d\d)+)\s+(\S+)\s*(?:"(.+)")?/) {
       my $line = Line->new(map => $self);
       $line->type($2);
+      $line->label($3);
+      $line->id('line' . $line_id++);
       my @points = map { my $point = Point->new(x => substr($_, 0, 2),
 						y => substr($_, 2, 2));
 		       } split(/-/, $1);
@@ -588,6 +619,16 @@ sub svg_hexes {
   $doc .= qq{  </g>\n};
 }
 
+sub svg_line_labels {
+  my $self = shift;
+  my $doc = qq{  <g id="line_labels">\n};
+  foreach my $line (@{$self->lines}) {
+    $doc .= $line->svg_label();
+  }
+  $doc .= qq{  </g>\n};
+  return $doc;
+}
+
 sub svg_labels {
   my $self = shift;
   my $doc = qq{  <g id="labels">\n};
@@ -608,6 +649,7 @@ sub svg {
   $doc .= $self->svg_things(); # icons, lines
   $doc .= $self->svg_coordinates();
   $doc .= $self->svg_hexes();
+  $doc .= $self->svg_line_labels();
   $doc .= $self->svg_labels();
   $doc .= $self->license() ||'';
   $doc .= join("\n", @{$self->other()}) . "\n";
@@ -800,16 +842,14 @@ sub member {
 }
 
 sub verbose {
-  return unless $verbose;
-  my $str = shift;
-  warn $str;
+  $log->info(shift);
 }
 
 sub place_major {
   my ($x, $y, $encounter) = @_;
   my $thing = one(@{$encounters{$encounter}});
   return unless $thing;
-  verbose("placing $thing ($encounter) at ($x,$y)\n");
+  verbose("placing $thing ($encounter) at ($x,$y)");
   my $hex = one(full_hexes($x, $y));
   $x += $hex->[0];
   $y += $hex->[1];
@@ -819,7 +859,7 @@ sub place_major {
   if ($encounter eq 'settlement') {
     if ($primary eq 'plains') {
       $color = one('light-soil', 'soil');
-      verbose(" " . $world{$coordinates} . " is $primary and was changed to $color\n");
+      verbose(" " . $world{$coordinates} . " is $primary and was changed to $color");
     }
     if ($primary ne 'plains' or member($thing, 'large-town', 'city')) {
       push(@needs_fields, [$x, $y]);
@@ -913,24 +953,24 @@ sub generate_region {
   for (1..9) {
     my $coordinates = pick_unassigned($x, $y, @region);
     $terrain = one($primary{$primary});
-    verbose(" primary   $coordinates => $terrain\n");
+    verbose(" primary   $coordinates => $terrain");
     $world{$coordinates} = $terrain;
   }
 
   for (1..6) {
     my $coordinates = pick_unassigned($x, $y, @region);
     $terrain =  one($secondary{$primary});
-    verbose(" secondary $coordinates => $terrain\n");
+    verbose(" secondary $coordinates => $terrain");
     $world{$coordinates} = $terrain;
   }
 
   for my $coordinates (pick_remaining($x, $y, @region)) {
     if (rand > 0.1) {
       $terrain = one($tertiary{$primary});
-      verbose(" tertiary  $coordinates => $terrain\n");
+      verbose(" tertiary  $coordinates => $terrain");
     } else {
       $terrain = one($wildcard{$primary});
-      verbose(" wildcard  $coordinates => $terrain\n");
+      verbose(" wildcard  $coordinates => $terrain");
     }
     $world{$coordinates} = $terrain;
   }
@@ -939,48 +979,52 @@ sub generate_region {
     my $random = rand 6;
     if ($random < 3) {
       $terrain = one($primary{$primary});
-      verbose("  halfhex primary   $coordinates => $terrain\n");
+      verbose("  halfhex primary   $coordinates => $terrain");
     } elsif ($random < 5) {
       $terrain = one($secondary{$primary});
-      verbose("  halfhex secondary $coordinates => $terrain\n");
+      verbose("  halfhex secondary $coordinates => $terrain");
     } else {
       $terrain = one($tertiary{$primary});
-      verbose("  halfhex tertiary  $coordinates => $terrain\n");
+      verbose("  halfhex tertiary  $coordinates => $terrain");
     }
     $world{$coordinates} = $terrain;
   }
 }
 
 sub seed_region {
-  my ($seeds, $primary) = @_;
-  my $hex = shift @$seeds;
-  verbose("seed_region (" . $hex->[0] . "," . $hex->[1] . ") with $primary\n");
-  generate_region($hex->[0], $hex->[1], $primary);
-  for my $seed (@$seeds) {
-    my $terrain;
+  my ($seeds, $terrain) = @_;
+  my $terrain_above;
+  for my $hex (@$seeds) {
+    verbose("seed_region (" . $hex->[0] . "," . $hex->[1] . ") with $terrain");
+    generate_region($hex->[0], $hex->[1], $terrain);
+    populate_region($hex, $terrain);
     my $random = rand 12;
+    # pick next terrain based on the previous one (to the left); or the one
+    # above if in the first column
+    my $next;
+    $terrain = $terrain_above if $hex->[0] == 1 and $terrain_above;
     if ($random < 6) {
-      $terrain = one($primary{$primary});
-      verbose("picked primary $terrain\n");
+      $next = one($primary{$terrain});
+      verbose("picked primary $next");
     } elsif ($random < 9) {
-      $terrain = one($secondary{$primary});
-      verbose("picked secondary $terrain\n");
+      $next = one($secondary{$terrain});
+      verbose("picked secondary $next");
     } elsif ($random < 11) {
-      $terrain = one($tertiary{$primary});
-      verbose("picked tertiary $terrain\n");
+      $next = one($tertiary{$terrain});
+      verbose("picked tertiary $next");
     } else {
-      $terrain = one($wildcard{$primary});
-      verbose("picked wildcard $terrain\n");
+      $next = one($wildcard{$terrain});
+      verbose("picked wildcard $next");
     }
-    die "Terrain lacks reverse_lookup: $terrain\n" unless $reverse_lookup{$terrain};
-    seed_region($seed, $reverse_lookup{$terrain});
+    $terrain_above = $terrain if $hex->[0] == 1;
+    die "Terrain lacks reverse_lookup: $next\n" unless $reverse_lookup{$next};
+    $terrain = $reverse_lookup{$next};
   }
-  populate_region($hex, $primary);
 }
 
 sub agriculture {
   for my $hex (@needs_fields) {
-    verbose("looking to plant fields near " . sprintf("%02d%02d", $hex->[0], $hex->[1]) . "\n");
+    verbose("looking to plant fields near " . sprintf("%02d%02d", $hex->[0], $hex->[1]));
     my $delta = [[[-1,  0], [ 0, -1], [+1,  0], [+1, +1], [ 0, +1], [-1, +1]],  # x is even
 		 [[-1, -1], [ 0, -1], [+1, -1], [+1,  0], [ 0, +1], [-1,  0]]]; # x is odd
     my @plains;
@@ -990,9 +1034,9 @@ sub agriculture {
       my $coordinates = sprintf("%02d%02d", $x, $y);
       if ($world{$coordinates}) {
 	my ($color, $terrain) = split(' ', $world{$coordinates}, 2);
-	verbose("  $coordinates is " . $world{$coordinates} . " ie. " . $reverse_lookup{$world{$coordinates}} . "\n");
+	verbose("  $coordinates is " . $world{$coordinates} . " ie. " . $reverse_lookup{$world{$coordinates}});
 	if ($reverse_lookup{$world{$coordinates}} eq 'plains') {
-	  verbose("   $coordinates is a candidate\n");
+	  verbose("   $coordinates is a candidate");
 	  push(@plains, $coordinates);
 	}
       }
@@ -1000,43 +1044,23 @@ sub agriculture {
     next unless @plains;
     my $target = one(@plains);
     $world{$target} = one('light-soil fields', 'soil fields');
-    verbose(" $target planted with " . $world{$target} . "\n");
+    verbose(" $target planted with " . $world{$target});
   }
 }
 
 sub generate_map {
-  my $bw = shift;
+  my ($bw, $width, $height) = @_;
+  $width = 20 if not defined $width or $width < 1 or $width > 100;
+  $height = 10 if not defined $height or $height < 1 or $height > 100;
 
-  # random seeds
-
-  # for my $x (0..4) {
-  #   for my $y (0..3) {
-  #     generate_region($x * 5 + 1, $y * 5 + 1 + $x % 2 * 2,
-  # 		      $seed_terrain[rand @seed_terrain]);
-  #   }
-  # }
-
-  # use a spread from the center at [11, 11]
-  my $seeds = [[11, 11],
-	       [[6, 8],
-	        [[1, 6]],
-		[[6, 3],
-		 [[1,1]]]],
-	       [[11, 6],
-		[[11, 1]],
-		[[16, 3],
-		 [[21, 1]]]],
-	       [[16, 8],
-		[[21, 6]],
-		[[21, 11]]],
-	       [[16, 13],
-		[[21, 16]],
-		[[16, 18]]],
-	       [[11, 16],
-		[[6, 18]]],
-	       [[6, 13],
-		[[1, 16]],
-		[[1, 11]]]];
+  my $seeds;
+  for (my $y = 1; $y < $height + 2; $y += 5) {
+    for (my $x = 1; $x < $width + 2; $x += 5) {
+      # [1,1] [6,3], [11,1], [16,3]
+      my $y0 = $y + int(($x % 10) / 3);
+      push(@$seeds, [$x, $y0]);
+    }
+  }
 
   %world = (); # reinitialize!
 
@@ -1048,7 +1072,7 @@ sub generate_map {
   for my $coordinates (keys %world) {
     $coordinates =~ /(..)(..)/;
     delete $world{$coordinates} if $1 < 1 or $2 < 1;
-    delete $world{$coordinates} if $1 > 23 or $2 > 18;
+    delete $world{$coordinates} if $1 > $width or $2 > $height;
   }
 
   if ($bw) {
@@ -1072,11 +1096,12 @@ use List::Util 'shuffle';
 
 # We're assuming that $width and $height have two digits (10 <= n <= 99).
 
-my $width = 20;
-my $height = 10;
-
-my $delta = [[[-1,  0], [ 0, -1], [+1,  0], [+1, +1], [ 0, +1], [-1, +1]],  # x is even
-	     [[-1, -1], [ 0, -1], [+1, -1], [+1,  0], [ 0, +1], [-1,  0]]]; # x is odd
+my $width;
+my $height;
+my $steepness;
+my $peak;
+my $peaks;
+my $bottom;
 
 sub xy {
   my $coordinates = shift;
@@ -1088,6 +1113,12 @@ sub coordinates {
   return sprintf("%02d%02d", $x, $y);
 }
 
+my $delta = [
+  # x is even
+  [[-1,  0], [ 0, -1], [+1,  0], [+1, +1], [ 0, +1], [-1, +1]],
+  # x is odd
+  [[-1, -1], [ 0, -1], [+1, -1], [+1,  0], [ 0, +1], [-1,  0]]];
+
 sub neighbor {
   # $hex is [x,y] or "0x0y" and $i is a number 0 .. 5
   my ($hex, $i) = @_;
@@ -1095,6 +1126,23 @@ sub neighbor {
   $hex = [xy($hex)] unless ref $hex;
   return ($hex->[0] + $delta->[$hex->[0] % 2]->[$i]->[0],
 	  $hex->[1] + $delta->[$hex->[0] % 2]->[$i]->[1]);
+}
+
+my $delta2 = [
+  # x is even
+  [[-2, +1], [-2,  0], [-2, -1], [-1, -1], [ 0, -2], [+1, -1],
+   [+2, -1], [+2,  0], [+2, +1], [+1, +2], [ 0, +2], [-1, +2]],
+  # x is odd
+  [[-2, +1], [-2,  0], [-2, -1], [-1, -2], [ 0, -2], [+1, -2],
+   [+2, -1], [+2,  0], [+2, +1], [+1, +1], [ 0, +2], [-1, +1]]];
+
+sub neighbor2 {
+  # $hex is [x,y] or "0x0y" and $i is a number 0 .. 11
+  my ($hex, $i) = @_;
+  die join(":", caller) . ": undefined direction for $hex\n" unless defined $i;
+  $hex = [xy($hex)] unless ref $hex;
+  return ($hex->[0] + $delta2->[$hex->[0] % 2]->[$i]->[0],
+	  $hex->[1] + $delta2->[$hex->[0] % 2]->[$i]->[1]);
 }
 
 sub legal {
@@ -1161,10 +1209,10 @@ sub flat {
 
 sub altitude {
   my ($world, $altitude) = @_;
-  my $current_altitude = 10;
+  my $current_altitude = $peak;
   my @batch;
   # place some peaks and put them in a batch
-  for (1 .. int($width * $height / 20)) {
+  for (1 .. $peaks) {
     # try to find an empty hex
     for (1 .. 6) {
       my $x = int(rand($width)) + 1;
@@ -1178,19 +1226,30 @@ sub altitude {
   }
   # go through the batch and add adjacent lower altitude hexes, if possible; the
   # hexes added are the next batch to look at
-  while (--$current_altitude > 0) {
+  while (--$current_altitude >= 0) {
     # warn "Altitude $current_altitude\n";
     my @next;
     for my $coordinates (@batch) {
-      # pick some random neighbors
-      for (1 .. 3) {
+      # pick some random neighbors based on steepness (allow fractions)
+      my $n = int($steepness);
+      $n++ if rand() < $steepness - $n;
+      for (1 .. $n) {
 	# try to find an empty neighbor; abort after six attempts
 	for (1 .. 6) {
 	  my $i = int(rand(6));
 	  my ($x, $y) = neighbor($coordinates, $i);
 	  next unless legal($x, $y);
 	  my $other = coordinates($x, $y);
-	  next if $altitude->{$other};
+	  # if this is taken, look further
+	  if ($altitude->{$other}) {
+	    $i = int(rand(12));
+	    ($x, $y) = neighbor2($coordinates, $i);
+	    next unless legal($x, $y);
+	    $other = coordinates($x, $y);
+	    # if this is also taken, try again
+	    next if $altitude->{$other};
+	  }
+	  warn "Neighbour of $coordinates: picked $other\n";
 	  # if we found an empty neighbor, set its altitude
 	  $altitude->{$other} = $current_altitude;
 	  push(@next, $other);
@@ -1295,8 +1354,10 @@ sub lakes {
   my ($world, $altitude, $water) = @_;
   # any areas without water flow are lakes
   for my $coordinates (keys %$altitude) {
-    next if defined $water->{$coordinates};
-    $world->{$coordinates} = "water";
+    if ($altitude->{$coordinates} <= $bottom
+	or not defined $water->{$coordinates}) {
+      $world->{$coordinates} = "water";
+    }
   }
 }
 
@@ -1661,8 +1722,13 @@ sub generate {
 }
 
 sub generate_map {
-  $width = shift||$width;
-  $height = shift||$height;
+  # The parameters turn into class variables.
+  $width = shift // 20;
+  $height = shift // 10;
+  $steepness = shift // 3;
+  $peaks = shift // int($width * $height / 20);
+  $peak = shift // 10;
+  $bottom = shift // 0;
   my $seed = shift||time;
   my $step = shift||0;
   
@@ -1812,21 +1878,31 @@ any '/render' => sub {
 get '/random' => sub {
   my $c = shift;
   my $bw = $c->param('bw');
-  $c->render(template => 'edit', map => Smale::generate_map($bw));
+  my $width = $c->param('width');
+  my $height = $c->param('height');
+  $c->render(template => 'edit', map => Smale::generate_map($bw, $width, $height));
 };
 
 get '/smale' => sub {
   my $c = shift;
   my $bw = $c->param('bw');
-  $c->render(template => 'edit',
-	     map => Smale::generate_map($bw));
+  my $width = $c->param('width');
+  my $height = $c->param('height');
+  if ($c->stash('format')||'' eq 'txt') {
+    $c->render(text => Smale::generate_map(undef, $width, $height));
+  } else {
+    $c->render(template => 'edit',
+	       map => Smale::generate_map($bw, $width, $height));
+  }
 };
 
 get '/smale/random' => sub {
   my $c = shift;
   my $bw = $c->param('bw');
+  my $width = $c->param('width');
+  my $height = $c->param('height');
   my $svg = Mapper->new()
-      ->initialize(Smale::generate_map($bw))
+      ->initialize(Smale::generate_map($bw, $width, $height))
       ->svg();
   $c->render(text => $svg, format => 'svg');
 };
@@ -1834,16 +1910,32 @@ get '/smale/random' => sub {
 get '/smale/random/text' => sub {
   my $c = shift;
   my $bw = $c->param('bw');
-  my $text = Smale::generate_map($bw);
+  my $width = $c->param('width');
+  my $height = $c->param('height');
+  my $text = Smale::generate_map($bw, $width, $height);
   $c->render(text => $text, format => 'txt');
 };
 
 get '/alpine' => sub {
   my $c = shift;
-  $c->render(template => 'edit',
-	     map => Schroeder::generate_map($c->param('width'),
-					    $c->param('height'),
-					    $c->param('seed')));
+  if ($c->stash('format')||'' eq 'txt') {
+    $c->render(text => Schroeder::generate_map($c->param('width'),
+					       $c->param('height'),
+					       $c->param('steepness'),
+					       $c->param('peaks'),
+					       $c->param('peak'),
+					       $c->param('bottom'),
+					       $c->param('seed')));
+  } else {
+    $c->render(template => 'edit',
+	       map => Schroeder::generate_map($c->param('width'),
+					      $c->param('height'),
+					      $c->param('steepness'),
+					      $c->param('peaks'),
+					      $c->param('peak'),
+					      $c->param('bottom'),
+					      $c->param('seed')));
+  }
 };
 
 get '/alpine/random' => sub {
@@ -1851,6 +1943,10 @@ get '/alpine/random' => sub {
   my $svg = Mapper->new()
       ->initialize(Schroeder::generate_map($c->param('width'),
 					   $c->param('height'),
+					   $c->param('steepness'),
+					   $c->param('peaks'),
+					   $c->param('peak'),
+					   $c->param('bottom'),
 					   $c->param('seed'),
 					   $c->param('step')))
       ->svg();
@@ -1861,6 +1957,10 @@ get '/alpine/random/text' => sub {
   my $c = shift;
   my $text = Schroeder::generate_map($c->param('width'),
 				     $c->param('height'),
+				     $c->param('steepness'),
+				     $c->param('peaks'),
+				     $c->param('peak'),
+				     $c->param('bottom'),
 				     $c->param('seed'),
 				     $c->param('step'));
   $c->render(text => $text, format => 'txt');
@@ -1869,7 +1969,11 @@ get '/alpine/random/text' => sub {
 get '/alpine/document' => sub {
   my $c = shift;
   my @params = ($c->param('width'),
-		$c->param('height'));
+		$c->param('height'),
+		$c->param('steepness'),
+		$c->param('peaks'),
+		$c->param('peak'),
+		$c->param('bottom'));
   my $seed = $c->param('seed')||rand;
 
   # prepare a map for every step
@@ -1881,8 +1985,13 @@ get '/alpine/document' => sub {
     $c->stash("map$step" => $svg);
   };
 
-  $c->render(template => 'alpinedocument',
+  $c->render(template => 'alpine_document',
 	     seed => $seed);
+};
+
+get '/alpine/parameters' => sub {
+  my $c = shift;
+  $c->render(template => 'alpine_parameters');
 };
 
 get '/source' => sub {
@@ -2072,10 +2181,10 @@ example with a 1pt stroke-width for the village.
     0201 grass village "Beachton"
     0202 sea "deep blue sea" 20
 
-You can also have lines connecting hexes. In order to better control
-the flow of these lines, you can provide multiple hexes through which
-these lines must pass. These lines can be used for borders, rivers or
-roads, for example.
+You can also have lines connecting hexes. In order to better control the flow of
+these lines, you can provide multiple hexes through which these lines must pass.
+You can append a label to these, too. These lines can be used for borders,
+rivers or roads, for example.
 
     text font-family="monospace" font-size="10pt"
     label font-family="sans-serif" font-size="12pt"
@@ -2092,7 +2201,7 @@ roads, for example.
     0201 grass village "Beachton"
     0202 sea "deep blue sea" 20
     border path attributes stroke="red" stroke-width="15" stroke-opacity="0.5" fill-opacity="0"
-    0002-0200 border
+    0002-0200 border "The Wall"
     road path attributes stroke="black" stroke-width="3" fill-opacity="0" stroke-dasharray="10 10"
     0000-0301 road
 
@@ -2113,7 +2222,7 @@ statement with an URL.
 
 You can find more files ("libraries") to include in the C<contrib>
 directory:
-L<https://github.com/kensanata/hex-mapping/tree/master/contrib>.
+L<https://alexschroeder.ch/cgit/hex-mapping/tree/contrib>.
 
 =head3 Large Areas
 
@@ -2350,6 +2459,15 @@ Click the submit button to generate the map itself. Or just keep reloading
 <%= link_to smalerandom => begin %>this link<% end %>.
 You'll find the map description in a comment within the SVG file.
 </p>
+%= form_for smale => begin
+<table>
+<tr><td>Width:</td><td>
+%= number_field width => 20, min => 5, max => 99
+</td></tr><tr><td>Height:</td><td>
+%= number_field height => 10, min => 5, max => 99
+</td></tr></table>
+%= submit_button
+% end
 <p>
 <%= link_to alpine => begin %>Alpine<% end %> will generate map data based on Alex
 Schroeder's algorithm that's trying to recreate a medieval Swiss landscape, with
@@ -2362,10 +2480,22 @@ You'll find the map description in a comment within the SVG file.
 %= form_for alpine => begin
 <table>
 <tr><td>Width:</td><td>
-%= number_field width => 20
+%= number_field width => 20, min => 5, max => 99
+</td><td>Bottom:</td><td>
+%= number_field bottom => 0, min => 0, max => 10
+</td><td>Peaks:</td><td>
+%= number_field peaks => 10, min => 0, max => 100
 </td></tr><tr><td>Height:</td><td>
-%= number_field height => 10
+%= number_field height => 10, min => 5, max => 99
+</td><td>Steepness:</td><td>
+%= number_field steepness => 3, min => 1, max => 6
+</td><td>Peak:</td><td>
+%= number_field peak => 10, min => 7, max => 10
 </td></tr></table>
+<p>
+See the <%= link_to alpineparameters => begin %>documentation<% end %> for an
+explanation of what these parameters do.
+</p>
 %= submit_button
 % end
 
@@ -2373,7 +2503,72 @@ You'll find the map description in a comment within the SVG file.
 @@ render.svg.ep
 
 
-@@ alpinedocument.html.ep
+@@ alpine_parameters.html.ep
+% layout 'default';
+% title 'Alpine Parameters';
+<h1>Alpine Parameters</h1>
+
+<p>
+This page explains what the parameters for the <em>Alpine</em> map generation
+will do.
+</p>
+<p>
+The parameters <strong>width</strong> and <strong>height</strong> determine how
+big the map is.
+</p>
+<p>
+Example:
+<%= link_to url_for('alpinerandom')->query(height => 10, width => 15) => begin %>15×10 map<% end %>.
+</p>
+<p>
+The number of peaks we start with is controlled by the <strong>peaks</strong>
+parameter (default is 5% of the hexes). Note that you need at least one peak in
+order to get any land at all.
+</p>
+<p>
+Examples:
+<%= link_to url_for('alpinerandom')->query(height => 10, width => 15, peaks => 1) => begin %>lonely mountain<% end %>,
+<%= link_to url_for('alpinerandom')->query(height => 10, width => 15, peaks => 2) => begin %>twin peaks<% end %>,
+<%= link_to url_for('alpinerandom')->query(height => 10, width => 15, peaks => 15) => begin %>here be glaciers<% end %>
+</p>
+<p>
+When creating elevations, we surround each hex with a number of other hexes at
+one altitude level lower. The number of these surrounding lower levels is
+controlled by the <strong>steepness</strong> parameter (default 3). Lower means
+steeper. Floating points are allowed. Please note that the maximum numbers of
+neighbors considered is the 6 immediate neighbors and the 12 neighbors one step
+away.
+</p>
+<p>
+Examples:
+<%= link_to url_for('alpinerandom')->query(height => 10, width => 15, steepness => 0) => begin %>ice needles map<% end %>,
+<%= link_to url_for('alpinerandom')->query(height => 10, width => 15, steepness => 2) => begin %>steep mountains map<% end %>,
+<%= link_to url_for('alpinerandom')->query(height => 10, width => 15, steepness => 4) => begin %>big mountains map<% end %>
+</p>
+<p>
+The sea level is set to altitude 0. That's how you sometimes get a water hex at
+the edge of the map. You can simulate global warming and set it to something
+higher using the <strong>bottom</strong> parameter.
+</p>
+<p>
+Example:
+<%= link_to url_for('alpinerandom')->query(height => 10, width => 15, steepness => 2, bottom => 5) => begin %>steep mountains and higher water level map<% end %>
+</p>
+<p>
+You can also control how high the highest peaks will be using the
+<strong>peak</strong> parameter (default 10). Note that nothing special happens
+to a hex with an altitude above 10. It's still mountain peaks. Thus, setting the
+parameter to something higher than 10 just makes sure that there will be a lot
+of mountain peaks.
+</p>
+<p>
+Examples:
+<%= link_to url_for('alpinerandom')->query(height => 10, width => 15, peak => 11) => begin %>big mountains<% end %>,
+<%= link_to url_for('alpinerandom')->query(height => 10, width => 15, steepness => 3, bottom => 3, peak => 8) => begin %>old country<% end %>
+</p>
+
+
+@@ alpine_document.html.ep
 % layout 'default';
 % title 'Alpine Documentation';
 <h1>Alpine Map: How does it get created?</h1>
@@ -2388,12 +2583,24 @@ and edit it using
 
 %== $map0
 
-<p>First, we pick a number of peaks and set their altitude to 10. Then we loop
-through all the altitudes from 10 down to 1 and for every hex we added in the
-previous run, we add three neighbors at a lower altitude, if possible. If our
-random growth missed any hexes, we just copy the height of a neighbor. If we
-can't find a suitable neighbor within a few tries, just make a hole in the
-ground (altitude 0).</p>
+<p>First, we pick 10 peaks and set their altitude to 10. Then we loop through
+all the altitudes from 10 down to 1 and for every hex we added in the previous
+run, we add 3 neighbors at a lower altitude, if possible. We'll also consider
+neighbors one step away. If our random growth missed any hexes, we just copy the
+height of a neighbor. If we can't find a suitable neighbor within a few tries,
+just make a hole in the ground (altitude 0).</p>
+
+<p>The number of peaks can be changed using the <em>peaks</em> parameter. Please
+note that 0 <em>peaks</em> will result in no land mass.</p>
+
+<p>The initial altitude of those peaks can be changed using the <em>peak</em>
+parameter. Please note that a <em>peak</em> smaller than 7 will result in no
+sources for rivers.</p>
+
+<p>The number of adjacent hexes at a lower altitude can be changed using the
+<em>steepness</em> parameter. Floating points are allowed. Please note that the
+maximum numbers of neighbors considered is the 6 immediate neighbors and the 12
+neighbors one step away.</p>
 
 %== $map1
 
@@ -2515,7 +2722,7 @@ td, th {
 <a href="https://campaignwiki.org/text-mapper">Text Mapper</a>&#x2003;
 <%= link_to 'Help' => 'help' %>&#x2003;
 <%= link_to 'Source' => 'source' %>&#x2003;
-<a href="https://github.com/kensanata/hex-mapping/blob/master/text-mapper.pl">GitHub</a>&#x2003;
+<a href="https://alexschroeder.ch/cgit/hex-mapping/about/#text-mapper">Git</a>&#x2003;
 <a href="https://alexschroeder.ch/wiki/Contact">Alex Schroeder</a>
 </body>
 </html>

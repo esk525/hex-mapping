@@ -8,6 +8,9 @@ This project collects the various tools I have used to work with hex
 maps. All of them are web applications (CGI scripts) written in Perl 5
 and the maps are always SVG documents.
 
+Bugs, feature requests, questions – all sorts of questions: please
+see the [Software Wiki](https://alexschroeder.ch/software/Hex_Mapping).
+
 <!-- markdown-toc start - Don't edit this section. Run M-x markdown-toc-refresh-toc -->
 **Table of Contents**
 
@@ -34,7 +37,7 @@ Example input:
     0103 hill "bone hills"
     0104 forest
 
-Try it: https://campaignwiki.org/text-mapper
+[Try it](https://campaignwiki.org/text-mapper).
 
 ## Text Maps from the Command Line
 
@@ -99,20 +102,14 @@ Assuming the following description:
 0101 dark-green trees village
 ```
 
-The description will be generated from any tables that exist:
+The description will be generated from any tables that match:
 
 * dark-green
-* dark-green trees
-* dark-green village
-* trees dark-green
 * trees
-* trees village
-* village dark-green
-* village trees
 * village
 
-It would make sense to just provide tables for "trees" and
-"village", for example.
+It would make sense to just provide tables for "trees" and "village",
+for example.
 
 Tables looks like this:
 
@@ -136,7 +133,12 @@ you can link from one table to another using square brackets.
 Square brackets are also used for dice rolls. A dice roll can look
 like this: 3d6, 3d6+5 3d6x10, or 3d6x10+5.
 
-Try it: https://campaignwiki.org/hex-describe
+There's an built-in help page with more details for end users. If you
+intend to host the application yourself, use `perldoc hex-describe.pl`
+to get a more technical documentation based on the comments in the
+code.
+
+[Try it](https://campaignwiki.org/hex-describe).
 
 # Traveller Subsector Generator
 
@@ -155,7 +157,7 @@ It also takes the UWP of a sector or subsector and generates a map for
 you. If possible, it also adds communication and trade routes based on
 some heuristics.
 
-Try it: https://campaignwiki.org/traveller
+[Try it](https://campaignwiki.org/traveller).
 
 ## Subsectors from the Command Line
 
@@ -193,7 +195,7 @@ Example input:
     n-n O-. .
      n-"-" .
 
-Try it: https://alexschroeder.ch/old-school-hex
+[Try it](https://alexschroeder.ch/old-school-hex).
 
 # Monones
 
@@ -203,4 +205,16 @@ based on Amit Patel's post
 [Polygonal Map Generation for Games](http://www-cs-students.stanford.edu/~amitp/game-programming/polygon-map-generation/)
 (2010).
 
-https://campaignwiki.org/monones
+[Try it](https://campaignwiki.org/monones).
+
+# Names
+
+This application generates a bunch of names based on a set of
+syllables. When you reload, it will generate a new set of syllables
+and a new set of names based on them. The effect is that these names
+all sound as if they're part of the same "language". This idea is
+based on the original Elite system name generator. One way to look at
+the relevant code would be
+[Text Elite](http://www.iancgbell.clara.net/elite/text/index.htm).
+
+[Try it](https://campaignwiki.org/names).

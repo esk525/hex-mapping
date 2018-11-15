@@ -1,5 +1,5 @@
 #!/usr/bin/perl
-# Copyright (C) 2007-2013  Alex Schroeder <alex@gnu.org>
+# Copyright (C) 2007-2018  Alex Schroeder <alex@gnu.org>
 #
 # This program is free software: you can redistribute it and/or modify it under
 # the terms of the GNU General Public License as published by the Free Software
@@ -444,17 +444,19 @@ sub print_html {
 	 p(a({-href=>'http://www.alexschroeder.ch/wiki/About'},
 	     'Alex Schröder'),
 	   a({-href=>url() . '/source'}, 'Source'),
-	   a({-href=>'https://github.com/kensanata/hex-mapping'},
-	     'GitHub')),
+	   a({-href=>'https://alexschroeder.ch/cgit/hex-mapping/about/#old-school-hex'},
+	     'Git')),
 	 end_html());
 }
 
 sub main {
   if (param('map')) {
-    print_map(param('map'));
+    my $map = param('map');
+    print_map($map);
   } elsif (path_info() eq '/source') {
     seek(DATA,0,0);
     undef $/;
+    print "Content-Type: text/plain\r\n\r\n";
     print <DATA>;
   } else {
     print_html();
